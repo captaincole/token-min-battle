@@ -11,9 +11,10 @@ import {
   runTurn,
   type EngineState,
 } from './lib/engine';
-import { extractCode, ensureHtmlDoc } from './lib/extract';
+import { extractCode, ensureHtmlDoc, prettyHtml } from './lib/extract';
 import { compareCanvases, snapshotIframe } from './lib/diff';
 import { extractPalette } from './lib/palette';
+import { looksLikeCode } from './lib/validate';
 
 type ChatMessage = {
   role: 'user' | 'assistant' | 'system';
@@ -118,9 +119,36 @@ export default function App() {
     }
   }
 
+  function handleReset() {
+    setMessages([]);
+    setInput('');
+    setTotalPromptTokens(0);
+    setTotalCompletionTokens(0);
+    setMatchPercent(null);
+    setDiffStats(null);
+    setSolved(false);
+    setCurrentCode(null);
+    const userIframe = userIframeRef.current;
+    if (userIframe) userIframe.srcdoc = '';
+    const mount = diffMountRef.current;
+    if (mount) mount.replaceChildren();
+  }
+
   async function handleSend() {
     const engine = engineRef.current;
     if (!engine || !input.trim() || isGenerating) return;
+
+    const codeCheck = looksLikeCode(input);
+    if (codeCheck.flagged) {
+      setMessages((m) => [
+        ...m,
+        {
+          role: 'system',
+          content: `no code. only vibes. describe picture w words pls 🪨 (${codeCheck.reason})`,
+        },
+      ]);
+      return;
+    }
 
     const userMsg: ChatMessage = { role: 'user', content: input.trim() };
     const newMessages = [...messages, userMsg];
@@ -233,7 +261,17 @@ export default function App() {
       <div className="main">
         {/* CHAT COLUMN */}
         <div className="col chat-col">
-          <div className="col-header">chat</div>
+          <div className="col-header">
+            <span>chat</span>
+            <button
+              className="ghost small-btn"
+              onClick={handleReset}
+              disabled={messages.length === 0 && totalPromptTokens === 0}
+              title="Clear transcript and counters. Keeps model loaded."
+            >
+              reset
+            </button>
+          </div>
 
           {engineState.kind === 'idle' && (
             <div className="engine-status">
@@ -289,34 +327,47 @@ export default function App() {
             )}
           </div>
 
-          <div className="input-row">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={
-                engineState.kind === 'ready'
-                  ? 'message the model… (⌘↵ to send)'
-                  : 'load the model first.'
-              }
-              disabled={engineState.kind !== 'ready' || isGenerating}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-            />
-            <button
-              onClick={handleSend}
-              disabled={
-                engineState.kind !== 'ready' ||
-                isGenerating ||
-                !input.trim()
-              }
-            >
-              send
-            </button>
-          </div>
+          {(() => {
+            const inputCodeCheck = looksLikeCode(input);
+            return (
+              <>
+                {inputCodeCheck.flagged && input.trim() && (
+                  <div className="input-warning">
+                    why u coding?? vibes only plz 🪨
+                  </div>
+                )}
+                <div className="input-row">
+                  <textarea
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder={
+                      engineState.kind === 'ready'
+                        ? 'message the model… (⌘↵ to send)'
+                        : 'load the model first.'
+                    }
+                    disabled={engineState.kind !== 'ready' || isGenerating}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        handleSend();
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={handleSend}
+                    disabled={
+                      engineState.kind !== 'ready' ||
+                      isGenerating ||
+                      !input.trim() ||
+                      inputCodeCheck.flagged
+                    }
+                  >
+                    send
+                  </button>
+                </div>
+              </>
+            );
+          })()}
 
           <div className="token-meter">
             <div className="stat">
@@ -345,7 +396,7 @@ export default function App() {
             </span>
           </div>
           <Highlight
-            code={currentCode ?? STARTER_TEMPLATE}
+            code={prettyHtml(currentCode ?? STARTER_TEMPLATE)}
             language="markup"
             theme={themes.vsDark}
           >
